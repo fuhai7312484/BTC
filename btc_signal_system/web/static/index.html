@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BTC 实时信号系统</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">₿</span>
+        <div>
+          <h1>BTC 实时信号系统</h1>
+          <p id="status-line">正在加载实时市场状态...</p>
+        </div>
+      </div>
+      <div class="actions">
+        <span id="mode-pill" class="mode-pill">仿真模式</span>
+        <button id="refresh-btn" class="icon-button" type="button" title="立即刷新" aria-label="立即刷新">↻</button>
+      </div>
+    </header>
+
+    <div class="status-band">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span>数据刷新周期：1 秒</span>
+      <span class="status-separator" aria-hidden="true"></span>
+      <span>时间格式：yyyy-MM-DD hh:mm:ss</span>
+    </div>
+
+    <section class="market-grid" aria-label="BTC 周期信号">
+      <article class="market-panel" data-market="5m">
+        <header class="market-head">
+          <div class="market-heading">
+            <span class="timeframe-tag">5M</span>
+            <h2>5 分钟信号</h2>
+          </div>
+          <div class="countdown" aria-label="5 分钟市场结算倒计时">
+            <span>距结算</span>
+            <strong id="countdown-5m">--:--</strong>
+          </div>
+        </header>
+
+        <div class="signal-summary">
+          <div class="signal-primary">
+            <span class="section-label">当前方向</span>
+            <strong id="direction-5m" class="direction">--</strong>
+          </div>
+          <dl class="signal-stats">
+            <div><dt>置信度</dt><dd id="confidence-5m">--</dd></div>
+            <div><dt>综合评分</dt><dd id="score-5m">--</dd></div>
+          </dl>
+        </div>
+
+        <div class="probability-list" aria-label="5 分钟方向概率">
+          <div class="probability-row up-row">
+            <span>看涨</span><div class="meter"><i id="long-bar-5m"></i></div><strong id="long-5m">--</strong>
+          </div>
+          <div class="probability-row down-row">
+            <span>看跌</span><div class="meter"><i id="short-bar-5m"></i></div><strong id="short-5m">--</strong>
+          </div>
+          <div class="probability-row neutral-row">
+            <span>观望</span><div class="meter"><i id="neutral-bar-5m"></i></div><strong id="neutral-5m">--</strong>
+          </div>
+        </div>
+
+        <section class="data-section quote-section">
+          <div class="section-head"><h3>BTC 价格基准</h3><span id="updated-5m">--</span></div>
+          <div class="price-strip">
+            <div><span>当前价</span><strong id="current-5m">--</strong></div>
+            <div><span>目标价</span><strong id="target-5m">--</strong></div>
+            <div><span>价格差</span><strong id="gap-5m">--</strong></div>
+            <div><span>UP 中间价</span><strong id="contract-5m">--</strong></div>
+          </div>
+        </section>
+
+        <section class="data-section quote-section">
+          <div class="section-head"><h3>Polymarket 实时盘口</h3><span id="quote-source-5m">正在校准报价...</span></div>
+          <div class="table-wrap">
+            <table class="quote-table">
+              <thead><tr><th>合约</th><th>买入价 (BUY)</th><th>卖出价 (SELL)</th><th>买卖价差</th></tr></thead>
+              <tbody>
+                <tr><th><span class="outcome up">↑ UP</span></th><td id="up-buy-5m">--</td><td id="up-sell-5m">--</td><td id="up-spread-5m">--</td></tr>
+                <tr><th><span class="outcome down">↓ DOWN</span></th><td id="down-buy-5m">--</td><td id="down-sell-5m">--</td><td id="down-spread-5m">--</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="reason-list" id="reasons-5m"></div>
+      </article>
+
+      <article class="market-panel" data-market="15m">
+        <header class="market-head">
+          <div class="market-heading">
+            <span class="timeframe-tag">15M</span>
+            <h2>15 分钟信号</h2>
+          </div>
+          <div class="countdown" aria-label="15 分钟市场结算倒计时">
+            <span>距结算</span>
+            <strong id="countdown-15m">--:--</strong>
+          </div>
+        </header>
+
+        <div class="signal-summary">
+          <div class="signal-primary">
+            <span class="section-label">当前方向</span>
+            <strong id="direction-15m" class="direction">--</strong>
+          </div>
+          <dl class="signal-stats">
+            <div><dt>置信度</dt><dd id="confidence-15m">--</dd></div>
+            <div><dt>综合评分</dt><dd id="score-15m">--</dd></div>
+          </dl>
+        </div>
+
+        <div class="probability-list" aria-label="15 分钟方向概率">
+          <div class="probability-row up-row">
+            <span>看涨</span><div class="meter"><i id="long-bar-15m"></i></div><strong id="long-15m">--</strong>
+          </div>
+          <div class="probability-row down-row">
+            <span>看跌</span><div class="meter"><i id="short-bar-15m"></i></div><strong id="short-15m">--</strong>
+          </div>
+          <div class="probability-row neutral-row">
+            <span>观望</span><div class="meter"><i id="neutral-bar-15m"></i></div><strong id="neutral-15m">--</strong>
+          </div>
+        </div>
+
+        <section class="data-section">
+          <div class="section-head"><h3>BTC 价格基准</h3><span id="updated-15m">--</span></div>
+          <div class="price-strip">
+            <div><span>当前价</span><strong id="current-15m">--</strong></div>
+            <div><span>目标价</span><strong id="target-15m">--</strong></div>
+            <div><span>价格差</span><strong id="gap-15m">--</strong></div>
+            <div><span>UP 中间价</span><strong id="contract-15m">--</strong></div>
+          </div>
+        </section>
+
+        <section class="data-section">
+          <div class="section-head"><h3>Polymarket 实时盘口</h3><span id="quote-source-15m">正在校准报价...</span></div>
+          <div class="table-wrap">
+            <table class="quote-table">
+              <thead><tr><th>合约</th><th>买入价 (BUY)</th><th>卖出价 (SELL)</th><th>买卖价差</th></tr></thead>
+              <tbody>
+                <tr><th><span class="outcome up">↑ UP</span></th><td id="up-buy-15m">--</td><td id="up-sell-15m">--</td><td id="up-spread-15m">--</td></tr>
+                <tr><th><span class="outcome down">↓ DOWN</span></th><td id="down-buy-15m">--</td><td id="down-sell-15m">--</td><td id="down-spread-15m">--</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="reason-list" id="reasons-15m"></div>
+      </article>
+    </section>
+
+    <details class="raw-data">
+      <summary>查看原始市场数据</summary>
+      <div class="raw-head"><span>实时数据流</span><span id="updated-feed">--</span></div>
+      <pre id="feed-json">{}</pre>
+    </details>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

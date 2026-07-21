@@ -1,0 +1,16 @@
+{
+  "markets": [
+    {
+      "market_id": "btc-5m-live",
+      "label": "比特币涨跌预测 - 5 分钟",
+      "timeframe_minutes": 5,
+      "source": "polymarket-auto-discovery"
+    },
+    {
+      "market_id": "btc-15m-live",
+      "label": "比特币涨跌预测 - 15 分钟",
+      "timeframe_minutes": 15,
+      "source": "polymarket-auto-discovery"
+    }
+  ]
+}
