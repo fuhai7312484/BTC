@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Sequence
 
 from .models import MarketSnapshot
-from .utils import safe_stdev
+from .utils import clamp, safe_stdev
+
+
+DEFAULT_LOG_VOLATILITY_PER_SQRT_SECOND = 0.000075
+MIN_LOG_VOLATILITY_PER_SQRT_SECOND = 0.00004
 
 
 def pct_change(new: float | None, old: float | None) -> float | None:
@@ -54,6 +59,7 @@ class FeatureVector:
     contract_return_15m: float | None = None
     spread_pct: float | None = None
     order_imbalance: float | None = None
+    trade_imbalance: float | None = None
     distance_to_target_pct: float | None = None
     price_gap: float | None = None
     implied_probability: float | None = None
@@ -62,6 +68,10 @@ class FeatureVector:
     volatility_15m: float | None = None
     volume_trend: float | None = None
     momentum_score: float | None = None
+    market_probability: float | None = None
+    time_probability: float | None = None
+    seconds_to_expiry: float | None = None
+    expected_move_pct: float | None = None
 
 
 class FeatureEngine:
@@ -93,6 +103,19 @@ class FeatureEngine:
             contract_returns.get(60),
             contract_returns.get(300),
         )
+        market_probability = self._market_probability(snapshot)
+        seconds_to_expiry = self._seconds_to_expiry(snapshot)
+        volatility_per_sqrt_second = self._log_volatility_per_sqrt_second(snapshot, history)
+        time_probability = self._time_probability(
+            snapshot,
+            seconds_to_expiry,
+            volatility_per_sqrt_second,
+        )
+        expected_move_pct = (
+            volatility_per_sqrt_second * math.sqrt(max(seconds_to_expiry, 0.0)) * 100.0
+            if seconds_to_expiry is not None
+            else None
+        )
 
         return FeatureVector(
             spot_return_30s=spot_returns.get(30),
@@ -104,6 +127,7 @@ class FeatureEngine:
             contract_return_15m=contract_returns.get(900),
             spread_pct=spread_pct,
             order_imbalance=snapshot.order_imbalance,
+            trade_imbalance=snapshot.trade_imbalance,
             distance_to_target_pct=snapshot.distance_to_target_pct,
             price_gap=snapshot.price_gap,
             implied_probability=snapshot.implied_probability,
@@ -112,6 +136,10 @@ class FeatureEngine:
             volatility_15m=volatility_15m,
             volume_trend=volume_trend,
             momentum_score=momentum_score,
+            market_probability=market_probability,
+            time_probability=time_probability,
+            seconds_to_expiry=seconds_to_expiry,
+            expected_move_pct=expected_move_pct,
         )
 
     def _build_series(self, snapshot: MarketSnapshot, history: Sequence[MarketSnapshot], attr: str, windows: list[int]) -> dict[int, float | None]:
@@ -137,3 +165,74 @@ class FeatureEngine:
             (contract_5m or 0.0) * 0.22,
         ]
         return sum(components)
+
+    def _market_probability(self, snapshot: MarketSnapshot) -> float | None:
+        probabilities: list[float] = []
+        if snapshot.up_buy_price is not None and snapshot.up_sell_price is not None:
+            probabilities.append((snapshot.up_buy_price + snapshot.up_sell_price) / 2.0)
+        elif snapshot.contract_price is not None and 0.0 <= snapshot.contract_price <= 1.0:
+            probabilities.append(snapshot.contract_price)
+
+        if snapshot.down_buy_price is not None and snapshot.down_sell_price is not None:
+            down_mid = (snapshot.down_buy_price + snapshot.down_sell_price) / 2.0
+            probabilities.append(1.0 - down_mid)
+
+        valid = [probability for probability in probabilities if 0.0 <= probability <= 1.0]
+        if not valid:
+            return None
+        return clamp(sum(valid) / len(valid), 0.0, 1.0) * 100.0
+
+    def _seconds_to_expiry(self, snapshot: MarketSnapshot) -> float | None:
+        market_end = snapshot.metadata.get("market_end_timestamp") if snapshot.metadata else None
+        if not isinstance(market_end, (int, float)):
+            return None
+        return max(0.0, float(market_end) - snapshot.timestamp.timestamp())
+
+    def _log_volatility_per_sqrt_second(
+        self,
+        snapshot: MarketSnapshot,
+        history: Sequence[MarketSnapshot],
+    ) -> float:
+        cutoff = snapshot.timestamp - timedelta(minutes=5)
+        points = [
+            item
+            for item in history
+            if item.timestamp >= cutoff and item.current_price is not None and item.current_price > 0
+        ]
+        variances: list[float] = []
+        for previous, current in zip(points, points[1:]):
+            elapsed = (current.timestamp - previous.timestamp).total_seconds()
+            if elapsed <= 0 or previous.current_price in (None, 0) or current.current_price is None:
+                continue
+            log_return = math.log(current.current_price / previous.current_price)
+            variances.append((log_return * log_return) / elapsed)
+        if len(variances) < 3:
+            return DEFAULT_LOG_VOLATILITY_PER_SQRT_SECOND
+        realized = math.sqrt(sum(variances) / len(variances))
+        return max(realized, MIN_LOG_VOLATILITY_PER_SQRT_SECOND)
+
+    def _time_probability(
+        self,
+        snapshot: MarketSnapshot,
+        seconds_to_expiry: float | None,
+        volatility_per_sqrt_second: float,
+    ) -> float | None:
+        if (
+            snapshot.current_price is None
+            or snapshot.current_price <= 0
+            or snapshot.target_price is None
+            or snapshot.target_price <= 0
+            or seconds_to_expiry is None
+        ):
+            return None
+        if seconds_to_expiry <= 0:
+            if snapshot.current_price == snapshot.target_price:
+                return 50.0
+            return 99.0 if snapshot.current_price > snapshot.target_price else 1.0
+
+        horizon_deviation = volatility_per_sqrt_second * math.sqrt(seconds_to_expiry)
+        log_distance = math.log(snapshot.current_price / snapshot.target_price)
+        drift_adjustment = -0.5 * volatility_per_sqrt_second**2 * seconds_to_expiry
+        z_score = (log_distance + drift_adjustment) / max(horizon_deviation, 1e-9)
+        probability = 0.5 * (1.0 + math.erf(z_score / math.sqrt(2.0)))
+        return clamp(probability * 100.0, 1.0, 99.0)

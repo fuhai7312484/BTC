@@ -18,6 +18,7 @@ class ClobRealtimeTests(TestCase):
                     {
                         "asset_id": "up-token",
                         "timestamp": timestamp,
+                        "tick_size": "0.01",
                         "bids": [{"price": "0.31"}, {"price": "0.35"}],
                         "asks": [{"price": "0.42"}, {"price": "0.39"}],
                     },
@@ -39,6 +40,7 @@ class ClobRealtimeTests(TestCase):
         self.assertEqual(quote["down_buy_price"], 0.63)
         self.assertEqual(quote["down_sell_price"], 0.57)
         self.assertEqual(quote["contract_price"], 0.37)
+        self.assertEqual(quote["up_tick_size"], 0.01)
         self.assertEqual(updates, [{"btc-5m"}])
 
         feed._handle_message(
@@ -57,6 +59,18 @@ class ClobRealtimeTests(TestCase):
         quote = feed.market_quote("btc-5m", disconnected_max_age_seconds=10**12)
         assert quote is not None
         self.assertEqual((quote["up_buy_price"], quote["up_sell_price"]), (0.40, 0.36))
+
+        feed._handle_message(
+            {
+                "event_type": "tick_size_change",
+                "asset_id": "up-token",
+                "new_tick_size": "0.001",
+                "timestamp": timestamp + 2,
+            }
+        )
+        quote = feed.market_quote("btc-5m", disconnected_max_age_seconds=10**12)
+        assert quote is not None
+        self.assertEqual(quote["up_tick_size"], 0.001)
 
     def test_market_switch_removes_old_token_quotes(self) -> None:
         feed = PolymarketClobFeed()
@@ -88,7 +102,7 @@ class ClobRealtimeTests(TestCase):
         self.assertEqual(status["connection_count"], 4)
         self.assertEqual(status["token_count"], 4)
 
-    def test_wire_depth_changes_are_dropped_but_best_bid_ask_is_processed(self) -> None:
+    def test_wire_depth_changes_and_best_bid_ask_are_processed(self) -> None:
         feed = PolymarketClobFeed()
         feed.update_markets({"btc-5m": ("up-token", "down-token")})
         timestamp = int(time.time() * 1000)
@@ -114,14 +128,21 @@ class ClobRealtimeTests(TestCase):
                     "event_type": "price_change",
                     "timestamp": timestamp + 1,
                     "price_changes": [
-                        {"asset_id": "up-token", "best_bid": "0.31", "best_ask": "0.39"}
+                        {
+                            "asset_id": "up-token",
+                            "best_bid": "0.31",
+                            "best_ask": "0.39",
+                            "side": "BUY",
+                            "price": "0.31",
+                            "size": "25",
+                        }
                     ],
                 }
             )
         )
         quote = feed.market_quote("btc-5m", disconnected_max_age_seconds=10**12)
         assert quote is not None
-        self.assertEqual((quote["up_sell_price"], quote["up_buy_price"]), (0.30, 0.40))
+        self.assertEqual((quote["up_sell_price"], quote["up_buy_price"]), (0.31, 0.39))
 
         feed._handle_message(
             json.dumps(
@@ -137,6 +158,52 @@ class ClobRealtimeTests(TestCase):
         quote = feed.market_quote("btc-5m", disconnected_max_age_seconds=10**12)
         assert quote is not None
         self.assertEqual((quote["up_sell_price"], quote["up_buy_price"]), (0.32, 0.38))
+
+    def test_depth_and_trade_flow_are_combined_across_up_and_down(self) -> None:
+        feed = PolymarketClobFeed()
+        feed.update_markets({"btc-5m": ("up-token", "down-token")})
+        timestamp = int(time.time() * 1000)
+        feed._handle_message(
+            [
+                {
+                    "asset_id": "up-token",
+                    "timestamp": timestamp,
+                    "bids": [{"price": "0.48", "size": "80"}],
+                    "asks": [{"price": "0.52", "size": "20"}],
+                },
+                {
+                    "asset_id": "down-token",
+                    "timestamp": timestamp + 1,
+                    "bids": [{"price": "0.48", "size": "20"}],
+                    "asks": [{"price": "0.52", "size": "80"}],
+                },
+            ]
+        )
+        for asset_id, side, size, offset in (
+            ("up-token", "BUY", "30", 2),
+            ("up-token", "SELL", "10", 3),
+            ("down-token", "BUY", "5", 4),
+            ("down-token", "SELL", "15", 5),
+        ):
+            feed._handle_message(
+                {
+                    "event_type": "last_trade_price",
+                    "asset_id": asset_id,
+                    "side": side,
+                    "size": size,
+                    "price": "0.50",
+                    "timestamp": timestamp + offset,
+                }
+            )
+
+        quote = feed.market_quote("btc-5m", disconnected_max_age_seconds=10**12)
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertAlmostEqual(quote["up_order_imbalance"], 0.6)
+        self.assertAlmostEqual(quote["down_order_imbalance"], -0.6)
+        self.assertAlmostEqual(quote["order_imbalance"], 0.6)
+        self.assertAlmostEqual(quote["trade_imbalance"], 0.5)
 
     def test_stale_best_bid_ask_event_cannot_replace_current_quote(self) -> None:
         feed = PolymarketClobFeed(max_event_lag_seconds=2.0)

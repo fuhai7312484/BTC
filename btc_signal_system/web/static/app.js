@@ -10,6 +10,12 @@ const directionLabels = {
   neutral: "观望",
 };
 
+const tradeActionLabels = {
+  buy_up: "买入 UP ↑",
+  buy_down: "买入 DOWN ↓",
+  hold: "暂不交易",
+};
+
 const modeLabels = {
   simulation: "仿真模式",
   live: "实时模式",
@@ -42,6 +48,16 @@ const fieldLabels = {
   short_probability: "看跌概率",
   neutral_probability: "观望概率",
   score: "综合评分",
+  model_up_probability: "模型 UP 概率",
+  market_probability: "双边盘口概率",
+  time_probability: "时间结算概率",
+  seconds_to_expiry: "剩余结算秒数",
+  trade_action: "价值交易参考",
+  up_edge: "UP 净优势",
+  down_edge: "DOWN 净优势",
+  up_entry_price: "UP 建议最高入场价",
+  down_entry_price: "DOWN 建议最高入场价",
+  data_quality: "数据完整度",
   reasons: "判断原因",
   snapshot: "行情快照",
   current_price: "BTC 当前价",
@@ -63,6 +79,7 @@ const fieldLabels = {
   volume_5m: "5 分钟成交量",
   volume_15m: "15 分钟成交量",
   order_imbalance: "订单簿失衡度",
+  trade_imbalance: "60 秒成交失衡度",
   metadata: "元数据",
   source: "数据来源",
   market_bias: "市场方向偏好",
@@ -87,6 +104,14 @@ const fieldLabels = {
   connections: "WebSocket 连接明细",
   last_message_timestamp: "最后消息时间戳",
   dropped_stale_events: "已丢弃过期事件数",
+  up_bid_depth: "UP 前五档买盘深度",
+  up_ask_depth: "UP 前五档卖盘深度",
+  down_bid_depth: "DOWN 前五档买盘深度",
+  down_ask_depth: "DOWN 前五档卖盘深度",
+  up_order_imbalance: "UP 盘口深度失衡",
+  down_order_imbalance: "DOWN 盘口深度失衡",
+  up_trade_imbalance: "UP 成交失衡",
+  down_trade_imbalance: "DOWN 成交失衡",
   point_count: "价格点数量",
   latest_timestamp: "最新价格时间戳",
   latest_price: "最新价格",
@@ -176,6 +201,26 @@ const setText = (id, value) => {
   if (el) el.textContent = value;
 };
 
+const setPriceGap = (id, value) => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const numericValue = value == null ? NaN : Number(value);
+  el.textContent = fmt(Number.isFinite(numericValue) ? numericValue : null);
+  el.classList.toggle("price-gap-positive", Number.isFinite(numericValue) && numericValue > 0);
+  el.classList.toggle("price-gap-negative", Number.isFinite(numericValue) && numericValue < 0);
+};
+
+const setSignedPercent = (id, value) => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const numericValue = value == null ? NaN : Number(value);
+  el.textContent = Number.isFinite(numericValue)
+    ? `${numericValue > 0 ? "+" : ""}${numericValue.toFixed(1)}%`
+    : "--";
+  el.classList.toggle("metric-positive", Number.isFinite(numericValue) && numericValue > 0);
+  el.classList.toggle("metric-negative", Number.isFinite(numericValue) && numericValue < 0);
+};
+
 const renderMarket = (market) => {
   const suffix = market.timeframe_minutes <= 5 ? "5m" : "15m";
   const direction = market.direction || market.latest?.direction;
@@ -196,9 +241,24 @@ const renderMarket = (market) => {
   setBar(`short-bar-${suffix}`, shortProbability);
   setBar(`neutral-bar-${suffix}`, neutralProbability);
   setText(`score-${suffix}`, fmt(market.score ?? market.latest?.score, 2));
+  const tradeAction = market.trade_action ?? market.latest?.trade_action;
+  const tradeActionElement = document.getElementById(`trade-action-${suffix}`);
+  setText(`trade-action-${suffix}`, tradeActionLabels[tradeAction] || "--");
+  if (tradeActionElement) tradeActionElement.dataset.action = tradeAction || "";
+  setText(`model-up-${suffix}`, formatPercent(market.model_up_probability ?? market.latest?.model_up_probability));
+  setText(`time-probability-${suffix}`, formatPercent(market.time_probability ?? market.latest?.time_probability));
+  setText(`market-probability-${suffix}`, formatPercent(market.market_probability ?? market.latest?.market_probability));
+  const dataQuality = market.data_quality ?? market.latest?.data_quality;
+  setText(`data-quality-${suffix}`, formatPercent(dataQuality == null ? null : dataQuality * 100));
+  setSignedPercent(`up-edge-${suffix}`, market.up_edge ?? market.latest?.up_edge);
+  setSignedPercent(`down-edge-${suffix}`, market.down_edge ?? market.latest?.down_edge);
+  setText(`up-entry-${suffix}`, formatQuote(market.up_entry_price ?? market.latest?.up_entry_price));
+  setText(`down-entry-${suffix}`, formatQuote(market.down_entry_price ?? market.latest?.down_entry_price));
+  setSignedPercent(`order-imbalance-${suffix}`, snapshot.order_imbalance == null ? null : snapshot.order_imbalance * 100);
+  setSignedPercent(`trade-imbalance-${suffix}`, snapshot.trade_imbalance == null ? null : snapshot.trade_imbalance * 100);
   setText(`current-${suffix}`, fmt(snapshot.current_price));
   setText(`target-${suffix}`, fmt(snapshot.target_price));
-  setText(`gap-${suffix}`, fmt(snapshot.price_gap));
+  setPriceGap(`gap-${suffix}`, snapshot.price_gap);
   const targetValue = snapshot.target_price;
   marketTargetPrices[suffix] = targetValue == null || !Number.isFinite(Number(targetValue))
     ? null
@@ -282,7 +342,7 @@ const connectStream = () => {
       ["5m", "15m"].forEach((suffix) => {
         setText(`current-${suffix}`, fmt(price));
         const target = marketTargetPrices[suffix];
-        setText(`gap-${suffix}`, fmt(target == null ? null : price - target));
+        setPriceGap(`gap-${suffix}`, target == null ? null : price - target);
       });
       setText("updated-feed", formatTime(heartbeat.timestamp));
     } catch (error) {

@@ -5,7 +5,8 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 try:
@@ -25,6 +26,10 @@ class TokenQuote:
     last_trade: float | None = None
     timestamp: float | None = None
     received_at: float | None = None
+    tick_size: float | None = None
+    bids: dict[float, float] = field(default_factory=dict)
+    asks: dict[float, float] = field(default_factory=dict)
+    trades: deque[tuple[float, str, float]] = field(default_factory=lambda: deque(maxlen=4096))
 
 
 class PolymarketClobFeed:
@@ -35,10 +40,12 @@ class PolymarketClobFeed:
         on_update: Callable[[set[str]], None] | None = None,
         max_event_lag_seconds: float = 2.0,
         subscription_outcomes: tuple[str, ...] = ("up", "down"),
+        reconnect_delay_seconds: float = 1.0,
     ) -> None:
         self._on_update = on_update
         self._max_event_lag_seconds = max_event_lag_seconds
         self._subscription_outcomes = set(subscription_outcomes)
+        self._reconnect_delay_seconds = reconnect_delay_seconds
         self._market_tokens: dict[str, tuple[str, str]] = {}
         self._token_markets: dict[str, tuple[str, str]] = {}
         self._quotes: dict[str, TokenQuote] = {}
@@ -158,6 +165,8 @@ class PolymarketClobFeed:
         up_ask = up_quote.best_ask if up_quote else None
         down_bid = down_quote.best_bid if down_quote else None
         down_ask = down_quote.best_ask if down_quote else None
+        up_metrics = _quote_metrics(up_quote)
+        down_metrics = _quote_metrics(down_quote)
         return {
             "market_id": market_id,
             "up_token_id": up_token,
@@ -170,6 +179,24 @@ class PolymarketClobFeed:
             "best_ask": up_ask,
             "contract_price": (up_bid + up_ask) / 2.0 if up_bid is not None and up_ask is not None else None,
             "last_trade": up_quote.last_trade if up_quote else None,
+            "up_tick_size": up_quote.tick_size if up_quote else None,
+            "down_tick_size": down_quote.tick_size if down_quote else None,
+            "up_bid_depth": up_metrics["bid_depth"],
+            "up_ask_depth": up_metrics["ask_depth"],
+            "down_bid_depth": down_metrics["bid_depth"],
+            "down_ask_depth": down_metrics["ask_depth"],
+            "up_order_imbalance": up_metrics["order_imbalance"],
+            "down_order_imbalance": down_metrics["order_imbalance"],
+            "up_trade_imbalance": up_metrics["trade_imbalance"],
+            "down_trade_imbalance": down_metrics["trade_imbalance"],
+            "order_imbalance": _directional_imbalance(
+                up_metrics["order_imbalance"],
+                down_metrics["order_imbalance"],
+            ),
+            "trade_imbalance": _directional_imbalance(
+                up_metrics["trade_imbalance"],
+                down_metrics["trade_imbalance"],
+            ),
             "updated_at": updated_at,
             "received_at": received_at,
             "connected": connected,
@@ -206,7 +233,7 @@ class PolymarketClobFeed:
                 with self._lock:
                     self._connected = False
                     self._last_error = str(exc)
-            self._stop_event.wait(1.0)
+            self._stop_event.wait(self._reconnect_delay_seconds)
 
     def _connect_and_receive(self) -> None:
         with self._lock:
@@ -224,12 +251,11 @@ class PolymarketClobFeed:
             self.endpoint,
             proxy=proxy_url,
             open_timeout=12.0,
-            ping_interval=10.0,
-            ping_timeout=5.0,
+            ping_interval=None,
             close_timeout=1.0,
             compression=None,
-            max_size=None,
-            max_queue=(4096, 1024),
+            max_size=4 * 1024 * 1024,
+            max_queue=(128, 32),
         )
         self._socket = socket
         with self._lock:
@@ -248,7 +274,11 @@ class PolymarketClobFeed:
         )
 
         try:
+            last_ping = time.monotonic()
             while not self._stop_event.is_set():
+                if time.monotonic() - last_ping >= 5.0:
+                    socket.send("PING")
+                    last_ping = time.monotonic()
                 try:
                     message = socket.recv(timeout=1.0, decode=False)
                 except TimeoutError:
@@ -267,14 +297,8 @@ class PolymarketClobFeed:
 
     def _handle_message(self, message: str | bytes | dict[str, Any] | list[Any]) -> None:
         if isinstance(message, bytes):
-            if b'"event_type":"price_change"' in message or b'"event_type": "price_change"' in message:
-                return
             message = message.decode("utf-8", errors="replace")
         if isinstance(message, str):
-            # The market channel emits every depth-level mutation. Top-of-book
-            # updates arrive separately when custom_feature_enabled is true.
-            if '"event_type":"price_change"' in message or '"event_type": "price_change"' in message:
-                return
             try:
                 event = json.loads(message)
             except json.JSONDecodeError:
@@ -315,6 +339,9 @@ class PolymarketClobFeed:
                     str(change.get("asset_id") or ""),
                     best_bid=_float_or_none(change.get("best_bid")),
                     best_ask=_float_or_none(change.get("best_ask")),
+                    depth_side=str(change.get("side") or ""),
+                    depth_price=_float_or_none(change.get("price")),
+                    depth_size=_float_or_none(change.get("size")),
                     timestamp=timestamp,
                 )
                 if market_id:
@@ -323,6 +350,8 @@ class PolymarketClobFeed:
             market_id = self._update_token(
                 str(event.get("asset_id") or ""),
                 last_trade=_float_or_none(event.get("price")),
+                trade_side=str(event.get("side") or ""),
+                trade_size=_float_or_none(event.get("size")),
                 timestamp=timestamp,
             )
             if market_id:
@@ -336,12 +365,24 @@ class PolymarketClobFeed:
             )
             if market_id:
                 changed_markets.add(market_id)
+        elif event_type == "tick_size_change":
+            market_id = self._update_token(
+                str(event.get("asset_id") or ""),
+                tick_size=_float_or_none(event.get("new_tick_size") or event.get("tick_size")),
+                timestamp=timestamp,
+            )
+            if market_id:
+                changed_markets.add(market_id)
         elif event.get("asset_id") and (event.get("bids") is not None or event.get("asks") is not None):
             market_id = self._update_token(
                 str(event.get("asset_id")),
                 best_bid=_level_price(event.get("bids"), highest=True),
                 best_ask=_level_price(event.get("asks"), highest=False),
                 last_trade=_float_or_none(event.get("last_trade_price")),
+                bids=_level_sizes(event.get("bids"), highest=True),
+                asks=_level_sizes(event.get("asks"), highest=False),
+                replace_depth=True,
+                tick_size=_float_or_none(event.get("tick_size")),
                 timestamp=timestamp,
             )
             if market_id:
@@ -359,6 +400,15 @@ class PolymarketClobFeed:
         best_bid: float | None = None,
         best_ask: float | None = None,
         last_trade: float | None = None,
+        bids: dict[float, float] | None = None,
+        asks: dict[float, float] | None = None,
+        replace_depth: bool = False,
+        depth_side: str = "",
+        depth_price: float | None = None,
+        depth_size: float | None = None,
+        trade_side: str = "",
+        trade_size: float | None = None,
+        tick_size: float | None = None,
         timestamp: float,
     ) -> str | None:
         if not token_id:
@@ -368,13 +418,34 @@ class PolymarketClobFeed:
             if mapping is None:
                 return None
             quote = self._quotes.setdefault(token_id, TokenQuote())
+            if replace_depth:
+                quote.bids = dict(bids or {})
+                quote.asks = dict(asks or {})
+            side = depth_side.upper()
+            if depth_price is not None and depth_size is not None and side in {"BUY", "SELL"}:
+                levels = quote.bids if side == "BUY" else quote.asks
+                if depth_size <= 0:
+                    levels.pop(depth_price, None)
+                else:
+                    levels[depth_price] = depth_size
+                _trim_depth(quote.bids, highest=True)
+                _trim_depth(quote.asks, highest=False)
+                if best_bid is None and quote.bids:
+                    best_bid = max(quote.bids)
+                if best_ask is None and quote.asks:
+                    best_ask = min(quote.asks)
             if best_bid is not None:
                 quote.best_bid = best_bid
             if best_ask is not None:
                 quote.best_ask = best_ask
             if last_trade is not None:
                 quote.last_trade = last_trade
-            quote.timestamp = timestamp
+            if tick_size is not None and 0.0 < tick_size <= 1.0:
+                quote.tick_size = tick_size
+            normalized_trade_side = trade_side.upper()
+            if trade_size is not None and trade_size > 0 and normalized_trade_side in {"BUY", "SELL"}:
+                quote.trades.append((timestamp, normalized_trade_side, trade_size))
+            quote.timestamp = max(timestamp, quote.timestamp or timestamp)
             quote.received_at = time.time()
             return mapping[0]
 
@@ -421,6 +492,7 @@ class PolymarketClobRouter:
                         feed = PolymarketClobFeed(
                             on_update=self._on_update,
                             subscription_outcomes=(outcome,),
+                            reconnect_delay_seconds=0.75 + len(self._feeds) * 0.35,
                         )
                         self._feeds[key] = feed
                         should_start = self._started
@@ -451,6 +523,10 @@ class PolymarketClobRouter:
         up_ask = first_value("up_buy_price")
         down_bid = first_value("down_sell_price")
         down_ask = first_value("down_buy_price")
+        up_order_imbalance = first_value("up_order_imbalance")
+        down_order_imbalance = first_value("down_order_imbalance")
+        up_trade_imbalance = first_value("up_trade_imbalance")
+        down_trade_imbalance = first_value("down_trade_imbalance")
         return {
             "market_id": market_id,
             "up_token_id": first_value("up_token_id"),
@@ -463,6 +539,18 @@ class PolymarketClobRouter:
             "best_ask": up_ask,
             "contract_price": (up_bid + up_ask) / 2.0 if up_bid is not None and up_ask is not None else None,
             "last_trade": first_value("last_trade"),
+            "up_tick_size": first_value("up_tick_size"),
+            "down_tick_size": first_value("down_tick_size"),
+            "up_bid_depth": first_value("up_bid_depth"),
+            "up_ask_depth": first_value("up_ask_depth"),
+            "down_bid_depth": first_value("down_bid_depth"),
+            "down_ask_depth": first_value("down_ask_depth"),
+            "up_order_imbalance": up_order_imbalance,
+            "down_order_imbalance": down_order_imbalance,
+            "up_trade_imbalance": up_trade_imbalance,
+            "down_trade_imbalance": down_trade_imbalance,
+            "order_imbalance": _directional_imbalance(up_order_imbalance, down_order_imbalance),
+            "trade_imbalance": _directional_imbalance(up_trade_imbalance, down_trade_imbalance),
             "updated_at": max(
                 (part["updated_at"] for part in parts if part.get("updated_at") is not None),
                 default=None,
@@ -538,3 +626,71 @@ def _level_price(levels: Any, highest: bool) -> float | None:
     if not prices:
         return None
     return max(prices) if highest else min(prices)
+
+
+def _level_sizes(levels: Any, *, highest: bool, limit: int = 20) -> dict[float, float]:
+    if not isinstance(levels, list):
+        return {}
+    parsed: dict[float, float] = {}
+    for level in levels:
+        if not isinstance(level, dict):
+            continue
+        price = _float_or_none(level.get("price"))
+        size = _float_or_none(level.get("size"))
+        if price is not None and size is not None and size > 0:
+            parsed[price] = size
+    if len(parsed) <= limit:
+        return parsed
+    prices = sorted(parsed, reverse=highest)
+    return {price: parsed[price] for price in prices[:limit]}
+
+
+def _top_depth(levels: dict[float, float], *, highest: bool, limit: int = 5) -> float | None:
+    if not levels:
+        return None
+    prices = sorted(levels, reverse=highest)[:limit]
+    return sum(levels[price] for price in prices)
+
+
+def _trim_depth(levels: dict[float, float], *, highest: bool, limit: int = 20) -> None:
+    if len(levels) <= limit:
+        return
+    keep = set(sorted(levels, reverse=highest)[:limit])
+    for price in tuple(levels):
+        if price not in keep:
+            del levels[price]
+
+
+def _quote_metrics(quote: TokenQuote | None, trade_window_seconds: float = 60.0) -> dict[str, float | None]:
+    if quote is None:
+        return {
+            "bid_depth": None,
+            "ask_depth": None,
+            "order_imbalance": None,
+            "trade_imbalance": None,
+        }
+    bid_depth = _top_depth(quote.bids, highest=True)
+    ask_depth = _top_depth(quote.asks, highest=False)
+    depth_total = (bid_depth or 0.0) + (ask_depth or 0.0)
+    order_imbalance = (
+        ((bid_depth or 0.0) - (ask_depth or 0.0)) / depth_total
+        if depth_total > 0
+        else None
+    )
+
+    cutoff = time.time() - trade_window_seconds
+    buy_volume = sum(size for timestamp, side, size in quote.trades if timestamp >= cutoff and side == "BUY")
+    sell_volume = sum(size for timestamp, side, size in quote.trades if timestamp >= cutoff and side == "SELL")
+    trade_total = buy_volume + sell_volume
+    trade_imbalance = (buy_volume - sell_volume) / trade_total if trade_total > 0 else None
+    return {
+        "bid_depth": bid_depth,
+        "ask_depth": ask_depth,
+        "order_imbalance": order_imbalance,
+        "trade_imbalance": trade_imbalance,
+    }
+
+
+def _directional_imbalance(up_value: float | None, down_value: float | None) -> float | None:
+    values = [value for value in (up_value, -down_value if down_value is not None else None) if value is not None]
+    return sum(values) / len(values) if values else None

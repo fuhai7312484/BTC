@@ -132,6 +132,16 @@ def _extract_book(value: Any) -> tuple[float | None, float | None]:
     return best_bid, best_ask
 
 
+def _extract_tick_size(value: Any) -> float | None:
+    tick_size = _first_float(
+        value,
+        ("tick_size", "tickSize", "minimum_tick_size", "orderPriceMinTickSize"),
+    )
+    if tick_size is None or not 0.0 < tick_size <= 1.0:
+        return None
+    return tick_size
+
+
 def _first_direct_float(value: Any, keys: tuple[str, ...]) -> float | None:
     if not isinstance(value, dict):
         return None
@@ -356,6 +366,7 @@ class PolymarketClient:
             contract_price = contract_price or market_price
             market_slug = str(market_payload.get("slug") or "") or None
             schedule_metadata = _market_schedule(market_payload, definition.timeframe_minutes)
+            schedule_metadata.update(_market_fee_metadata(market_payload))
             with ThreadPoolExecutor(max_workers=4) as executor:
                 quotes_future = executor.submit(self._fetch_clob_quotes, token_id, down_token_id)
                 books_future = executor.submit(self._fetch_clob_books, token_id, down_token_id, definition)
@@ -372,6 +383,10 @@ class PolymarketClient:
                 trade_payload = trade_future.result()
             up_bid, up_ask = books.get("up", (None, None))
             down_bid, down_ask = books.get("down", (None, None))
+            for outcome in ("up", "down"):
+                tick_size = books.get(f"{outcome}_tick_size")
+                if tick_size is not None:
+                    schedule_metadata[f"{outcome}_tick_size"] = tick_size
             up_buy_price = up_ask if up_ask is not None else quotes.get("up_buy")
             up_sell_price = up_bid if up_bid is not None else quotes.get("up_sell")
             down_buy_price = down_ask if down_ask is not None else quotes.get("down_buy")
@@ -490,7 +505,7 @@ class PolymarketClient:
         up_token_id: str | None,
         down_token_id: str | None,
         definition: MarketDefinition,
-    ) -> dict[str, tuple[float | None, float | None]]:
+    ) -> dict[str, Any]:
         with ThreadPoolExecutor(max_workers=2) as executor:
             up_future = executor.submit(self._fetch_clob_payload, "book", up_token_id, definition)
             down_future = executor.submit(self._fetch_clob_payload, "book", down_token_id, definition)
@@ -499,6 +514,8 @@ class PolymarketClient:
         return {
             "up": _extract_book(up_payload) if up_payload is not None else (None, None),
             "down": _extract_book(down_payload) if down_payload is not None else (None, None),
+            "up_tick_size": _extract_tick_size(up_payload),
+            "down_tick_size": _extract_tick_size(down_payload),
         }
 
     def _fetch_clob_payload(self, endpoint: str, token_id: str | None, definition: MarketDefinition) -> Any:
@@ -763,6 +780,29 @@ def _market_target_price(market: dict[str, Any]) -> float | None:
         if value is not None and value > 0:
             return value
     return None
+
+
+def _market_fee_metadata(market: dict[str, Any]) -> dict[str, Any]:
+    fees_enabled = bool(market.get("feesEnabled") or market.get("fees_enabled"))
+    schedule = market.get("feeSchedule") or market.get("fee_schedule")
+    rate = None
+    if isinstance(schedule, dict):
+        rate = coerce_float(
+            schedule.get("rate")
+            or schedule.get("feeRate")
+            or schedule.get("takerFeeRate")
+            or schedule.get("taker_fee_rate")
+        )
+    if rate is None:
+        rate = coerce_float(market.get("takerFeeRate") or market.get("taker_fee_rate"))
+    if rate is not None and rate > 1.0:
+        rate /= 10_000.0
+    if fees_enabled and rate is None:
+        rate = 0.07
+    return {
+        "fees_enabled": fees_enabled,
+        "taker_fee_rate": rate if fees_enabled else 0.0,
+    }
 
 
 def _select_outcome(market: dict[str, Any]) -> tuple[str | None, str | None, float | None]:

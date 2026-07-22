@@ -192,6 +192,16 @@ class MarketService:
                 "clob_quote_complete": bool(quote.get("complete")),
                 "up_token_id": quote.get("up_token_id") or metadata.get("up_token_id"),
                 "down_token_id": quote.get("down_token_id") or metadata.get("down_token_id"),
+                "up_tick_size": quote.get("up_tick_size") or metadata.get("up_tick_size"),
+                "down_tick_size": quote.get("down_tick_size") or metadata.get("down_tick_size"),
+                "up_bid_depth": quote.get("up_bid_depth"),
+                "up_ask_depth": quote.get("up_ask_depth"),
+                "down_bid_depth": quote.get("down_bid_depth"),
+                "down_ask_depth": quote.get("down_ask_depth"),
+                "up_order_imbalance": quote.get("up_order_imbalance"),
+                "down_order_imbalance": quote.get("down_order_imbalance"),
+                "up_trade_imbalance": quote.get("up_trade_imbalance"),
+                "down_trade_imbalance": quote.get("down_trade_imbalance"),
             }
         )
         chainlink_price = self.realtime.current_price()
@@ -218,6 +228,8 @@ class MarketService:
             down_buy_price=_merge_numeric(quote.get("down_buy_price"), snapshot.down_buy_price),
             down_sell_price=_merge_numeric(quote.get("down_sell_price"), snapshot.down_sell_price),
             last_trade=_merge_numeric(quote.get("last_trade"), snapshot.last_trade),
+            order_imbalance=_merge_numeric(quote.get("order_imbalance")),
+            trade_imbalance=_merge_numeric(quote.get("trade_imbalance")),
             metadata=metadata,
         )
 
@@ -326,6 +338,7 @@ class MarketService:
                 volume_5m=float(feed["volume_5m"]),
                 volume_15m=float(feed["volume_15m"]),
                 order_imbalance=float(feed["order_imbalance"]),
+                trade_imbalance=float(feed["trade_imbalance"]),
                 metadata={
                     "source": feed.get("source", "simulation"),
                     "market_start_time": feed.get("market_start_time"),
@@ -436,6 +449,7 @@ class MarketService:
             volume_5m=None,
             volume_15m=None,
             order_imbalance=None,
+            trade_imbalance=None,
             metadata=metadata,
         )
         realtime_quote = self.clob_realtime.market_quote(definition.market_id)
@@ -537,5 +551,6 @@ def snapshot_to_dict(snapshot: MarketSnapshot) -> dict[str, Any]:
         "volume_5m": snapshot.volume_5m,
         "volume_15m": snapshot.volume_15m,
         "order_imbalance": snapshot.order_imbalance,
+        "trade_imbalance": snapshot.trade_imbalance,
         "metadata": snapshot.metadata,
     }

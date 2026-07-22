@@ -70,6 +70,7 @@ class SimulationFeed:
         volume_5m = volume_1m * (4.8 + abs(math.sin(elapsed / 17.0)))
         volume_15m = volume_5m * (2.6 + abs(math.sin(elapsed / 31.0)))
         order_imbalance = clamp(math.sin(elapsed / 11.0 + state.phase) * 0.78 + state.rng.uniform(-0.12, 0.12), -1.0, 1.0)
+        trade_imbalance = clamp(order_imbalance * 0.7 + state.rng.uniform(-0.18, 0.18), -1.0, 1.0)
         timeframe_seconds = definition.timeframe_minutes * 60
         market_end_timestamp = (int(timestamp // timeframe_seconds) + 1) * timeframe_seconds
         market_start_timestamp = market_end_timestamp - timeframe_seconds
@@ -95,8 +96,10 @@ class SimulationFeed:
             "volume_5m": round(volume_5m, 2),
             "volume_15m": round(volume_15m, 2),
             "order_imbalance": round(order_imbalance, 4),
+            "trade_imbalance": round(trade_imbalance, 4),
             "market_start_time": format_unix_timestamp(market_start_timestamp),
             "market_end_time": format_unix_timestamp(market_end_timestamp),
             "market_end_timestamp": market_end_timestamp,
+            "fees_enabled": False,
             "source": "simulation",
         }

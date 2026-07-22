@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 
 SignalDirection = Literal["long", "short", "neutral"]
+TradeAction = Literal["buy_up", "buy_down", "hold"]
 MarketBias = Literal["long", "short", "unknown"]
 DISPLAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
@@ -66,6 +67,7 @@ class MarketSnapshot:
     volume_5m: float | None = None
     volume_15m: float | None = None
     order_imbalance: float | None = None
+    trade_imbalance: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -103,6 +105,16 @@ class SignalResult:
     short_probability: float
     neutral_probability: float
     score: float
+    model_up_probability: float
+    market_probability: float | None
+    time_probability: float | None
+    seconds_to_expiry: float | None
+    trade_action: TradeAction
+    up_edge: float | None
+    down_edge: float | None
+    up_entry_price: float | None
+    down_entry_price: float | None
+    data_quality: float
     reasons: list[str]
     snapshot: MarketSnapshot
 
@@ -118,6 +130,16 @@ class SignalResult:
             "short_probability": round(self.short_probability, 4),
             "neutral_probability": round(self.neutral_probability, 4),
             "score": round(self.score, 4),
+            "model_up_probability": round(self.model_up_probability, 4),
+            "market_probability": round(self.market_probability, 4) if self.market_probability is not None else None,
+            "time_probability": round(self.time_probability, 4) if self.time_probability is not None else None,
+            "seconds_to_expiry": round(self.seconds_to_expiry, 3) if self.seconds_to_expiry is not None else None,
+            "trade_action": self.trade_action,
+            "up_edge": round(self.up_edge, 4) if self.up_edge is not None else None,
+            "down_edge": round(self.down_edge, 4) if self.down_edge is not None else None,
+            "up_entry_price": round(self.up_entry_price, 6) if self.up_entry_price is not None else None,
+            "down_entry_price": round(self.down_entry_price, 6) if self.down_entry_price is not None else None,
+            "data_quality": round(self.data_quality, 4),
             "reasons": self.reasons,
             "snapshot": {
                 "market_id": self.snapshot.market_id,
@@ -143,6 +165,7 @@ class SignalResult:
                 "volume_5m": self.snapshot.volume_5m,
                 "volume_15m": self.snapshot.volume_15m,
                 "order_imbalance": self.snapshot.order_imbalance,
+                "trade_imbalance": self.snapshot.trade_imbalance,
                 "metadata": self.snapshot.metadata,
             },
         }
