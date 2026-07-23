@@ -36,9 +36,18 @@
             <span class="timeframe-tag">5M</span>
             <h2>5 分钟信号</h2>
           </div>
-          <div class="countdown" aria-label="5 分钟市场结算倒计时">
-            <span>距结算</span>
-            <strong id="countdown-5m">--:--</strong>
+          <div class="market-controls">
+            <div class="strategy-controls">
+              <label class="strategy-tag" for="strategy-5m" title="开启 5 分钟策略提醒">
+                <input id="strategy-5m" type="checkbox" data-strategy="5m" />
+                <span>策略提醒</span>
+              </label>
+              <button id="strategy-settings-button-5m" class="strategy-settings-button" type="button" aria-label="设置 5 分钟策略参数" aria-controls="strategy-settings-5m" aria-expanded="false" data-strategy-settings-toggle="5m" title="设置 5 分钟策略参数" hidden>⚙</button>
+            </div>
+            <div class="countdown" aria-label="5 分钟市场结算倒计时">
+              <span>距结算</span>
+              <strong id="countdown-5m">--:--</strong>
+            </div>
           </div>
         </header>
 
@@ -116,9 +125,18 @@
             <span class="timeframe-tag">15M</span>
             <h2>15 分钟信号</h2>
           </div>
-          <div class="countdown" aria-label="15 分钟市场结算倒计时">
-            <span>距结算</span>
-            <strong id="countdown-15m">--:--</strong>
+          <div class="market-controls">
+            <div class="strategy-controls">
+              <label class="strategy-tag" for="strategy-15m" title="开启 15 分钟策略提醒">
+                <input id="strategy-15m" type="checkbox" data-strategy="15m" />
+                <span>策略提醒</span>
+              </label>
+              <button id="strategy-settings-button-15m" class="strategy-settings-button" type="button" aria-label="设置 15 分钟策略参数" aria-controls="strategy-settings-15m" aria-expanded="false" data-strategy-settings-toggle="15m" title="设置 15 分钟策略参数" hidden>⚙</button>
+            </div>
+            <div class="countdown" aria-label="15 分钟市场结算倒计时">
+              <span>距结算</span>
+              <strong id="countdown-15m">--:--</strong>
+            </div>
           </div>
         </header>
 
@@ -197,6 +215,35 @@
       <pre id="feed-json">{}</pre>
     </details>
   </main>
+  <section id="strategy-settings-5m" class="strategy-settings-popover" role="dialog" aria-labelledby="strategy-settings-title-5m" hidden>
+    <div class="strategy-settings-popover-head">
+      <div>
+        <strong id="strategy-settings-title-5m">5M 策略参数</strong>
+        <span id="strategy-settings-summary-5m">倒计时 40s · 买入价 &lt; 0.90 · 价格差 ±15</span>
+      </div>
+      <button class="strategy-settings-close" type="button" aria-label="关闭 5 分钟策略参数" data-strategy-settings-close="5m">×</button>
+    </div>
+    <div class="strategy-settings-popover-grid">
+      <label class="strategy-setting" for="strategy-window-seconds-5m"><span>提醒倒计时</span><span class="strategy-setting-control"><input id="strategy-window-seconds-5m" type="number" min="1" max="300" step="1" inputmode="numeric" aria-label="5M 提醒倒计时（秒）" data-strategy-market="5m" data-strategy-setting="windowSeconds" /><span>秒</span></span></label>
+      <label class="strategy-setting" for="strategy-max-buy-price-5m"><span>最高买入价</span><span class="strategy-setting-control"><input id="strategy-max-buy-price-5m" type="number" min="0.01" max="1" step="0.01" inputmode="decimal" aria-label="5M 最高买入价（USDC）" data-strategy-market="5m" data-strategy-setting="maxBuyPrice" /><span>USDC</span></span></label>
+      <label class="strategy-setting" for="strategy-min-price-gap-5m"><span>最低价格差</span><span class="strategy-setting-control"><input id="strategy-min-price-gap-5m" type="number" min="0" max="10000" step="1" inputmode="decimal" aria-label="5M 最低价格差（USD）" data-strategy-market="5m" data-strategy-setting="minPriceGap" /><span>USD</span></span></label>
+    </div>
+  </section>
+  <section id="strategy-settings-15m" class="strategy-settings-popover" role="dialog" aria-labelledby="strategy-settings-title-15m" hidden>
+    <div class="strategy-settings-popover-head">
+      <div>
+        <strong id="strategy-settings-title-15m">15M 策略参数</strong>
+        <span id="strategy-settings-summary-15m">倒计时 40s · 买入价 &lt; 0.90 · 价格差 ±15</span>
+      </div>
+      <button class="strategy-settings-close" type="button" aria-label="关闭 15 分钟策略参数" data-strategy-settings-close="15m">×</button>
+    </div>
+    <div class="strategy-settings-popover-grid">
+      <label class="strategy-setting" for="strategy-window-seconds-15m"><span>提醒倒计时</span><span class="strategy-setting-control"><input id="strategy-window-seconds-15m" type="number" min="1" max="300" step="1" inputmode="numeric" aria-label="15M 提醒倒计时（秒）" data-strategy-market="15m" data-strategy-setting="windowSeconds" /><span>秒</span></span></label>
+      <label class="strategy-setting" for="strategy-max-buy-price-15m"><span>最高买入价</span><span class="strategy-setting-control"><input id="strategy-max-buy-price-15m" type="number" min="0.01" max="1" step="0.01" inputmode="decimal" aria-label="15M 最高买入价（USDC）" data-strategy-market="15m" data-strategy-setting="maxBuyPrice" /><span>USDC</span></span></label>
+      <label class="strategy-setting" for="strategy-min-price-gap-15m"><span>最低价格差</span><span class="strategy-setting-control"><input id="strategy-min-price-gap-15m" type="number" min="0" max="10000" step="1" inputmode="decimal" aria-label="15M 最低价格差（USD）" data-strategy-market="15m" data-strategy-setting="minPriceGap" /><span>USD</span></span></label>
+    </div>
+  </section>
+  <div id="strategy-alerts" class="strategy-alerts" aria-live="polite" aria-label="策略提醒"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>

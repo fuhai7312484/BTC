@@ -123,7 +123,67 @@ const fieldLabels = {
 
 const countdownTargets = { "5m": null, "15m": null };
 const countdownClockOffsets = { "5m": 0, "15m": 0 };
+const countdownValues = { "5m": null, "15m": null };
 const marketTargetPrices = { "5m": null, "15m": null };
+const strategyMarkets = { "5m": null, "15m": null };
+const STRATEGY_PREFERENCE_KEY = "btc-strategy-reminder-preferences";
+const STRATEGY_SETTINGS_KEY = "btc-strategy-reminder-settings";
+const STRATEGY_ALERTED_KEY = "btc-strategy-reminder-alerted-markets";
+const STRATEGY_DEFAULTS = Object.freeze({
+  windowSeconds: 40,
+  maxBuyPrice: 0.9,
+  minPriceGap: 15,
+});
+const STRATEGY_SETTING_LIMITS = Object.freeze({
+  windowSeconds: { min: 1, max: 300 },
+  maxBuyPrice: { min: 0.01, max: 1 },
+  minPriceGap: { min: 0, max: 10000 },
+});
+
+const readStorageMap = (storage, key) => {
+  try {
+    return JSON.parse(storage.getItem(key) || "{}");
+  } catch (error) {
+    console.warn(`无法读取策略提醒状态：${error}`);
+    return {};
+  }
+};
+
+const writeStorageMap = (storage, key, value) => {
+  try {
+    storage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.warn(`无法保存策略提醒状态：${error}`);
+  }
+};
+
+const storedStrategyPreferences = readStorageMap(localStorage, STRATEGY_PREFERENCE_KEY);
+const storedStrategySettings = readStorageMap(localStorage, STRATEGY_SETTINGS_KEY);
+const strategyEnabled = {
+  "5m": storedStrategyPreferences["5m"] === true,
+  "15m": storedStrategyPreferences["15m"] === true,
+};
+const normalizeStrategySetting = (key, value, fallback = STRATEGY_DEFAULTS[key]) => {
+  const numericValue = Number(value);
+  const limits = STRATEGY_SETTING_LIMITS[key];
+  if (!limits || !Number.isFinite(numericValue)) return fallback;
+  return Math.min(limits.max, Math.max(limits.min, numericValue));
+};
+const createMarketStrategySettings = (suffix) => {
+  const scopedSettings = storedStrategySettings[suffix] && typeof storedStrategySettings[suffix] === "object"
+    ? storedStrategySettings[suffix]
+    : storedStrategySettings;
+  return {
+    windowSeconds: normalizeStrategySetting("windowSeconds", scopedSettings.windowSeconds),
+    maxBuyPrice: normalizeStrategySetting("maxBuyPrice", scopedSettings.maxBuyPrice),
+    minPriceGap: normalizeStrategySetting("minPriceGap", scopedSettings.minPriceGap),
+  };
+};
+const strategySettings = {
+  "5m": createMarketStrategySettings("5m"),
+  "15m": createMarketStrategySettings("15m"),
+};
+const strategyAlertedTargets = readStorageMap(sessionStorage, STRATEGY_ALERTED_KEY);
 
 const quoteSourceLabels = {
   clob_websocket: "CLOB WebSocket 实时盘口",
@@ -157,6 +217,75 @@ const setBar = (id, value) => {
   el.style.width = `${width}%`;
 };
 
+const strategyRecommendation = (market, settings) => {
+  if (!market) return null;
+  const isUp = market.tradeAction === "buy_up";
+  const isDown = market.tradeAction === "buy_down";
+  if (!isUp && !isDown) return null;
+
+  const side = isUp ? "UP" : "DOWN";
+  const buyPrice = Number(isUp ? market.upBuyPrice : market.downBuyPrice);
+  const priceGap = Number(market.priceGap);
+  if (!Number.isFinite(buyPrice) || buyPrice <= 0 || buyPrice >= settings.maxBuyPrice) return null;
+  if (!Number.isFinite(priceGap)) return null;
+  if (isUp && priceGap <= settings.minPriceGap) return null;
+  if (isDown && priceGap >= -settings.minPriceGap) return null;
+  return { side, buyPrice, priceGap };
+};
+
+const showStrategyAlert = (suffix, recommendation, remaining) => {
+  const container = document.getElementById("strategy-alerts");
+  if (!container) return false;
+  container.querySelector(`[data-alert-market="${suffix}"]`)?.remove();
+
+  const alert = document.createElement("section");
+  alert.className = `strategy-alert strategy-alert-${recommendation.side.toLowerCase()}`;
+  alert.dataset.alertMarket = suffix;
+  alert.setAttribute("role", "status");
+
+  const copy = document.createElement("div");
+  copy.className = "strategy-alert-copy";
+  const kicker = document.createElement("div");
+  kicker.className = "strategy-alert-kicker";
+  kicker.textContent = `${suffix.toUpperCase()} 策略提醒 · 距结算 ${remaining} 秒`;
+  const title = document.createElement("strong");
+  title.textContent = `建议购买 ${recommendation.side}`;
+  const price = document.createElement("p");
+  price.append("建议进入价格");
+  const priceValue = document.createElement("b");
+  priceValue.textContent = formatQuote(recommendation.buyPrice);
+  price.appendChild(priceValue);
+  const priceGap = document.createElement("p");
+  priceGap.className = "strategy-alert-gap";
+  priceGap.append("BTC 价格差");
+  const priceGapValue = document.createElement("b");
+  priceGapValue.textContent = `${recommendation.priceGap > 0 ? "+" : ""}${recommendation.priceGap.toFixed(2)}`;
+  priceGap.appendChild(priceGapValue);
+  copy.append(kicker, title, price, priceGap);
+
+  const closeButton = document.createElement("button");
+  closeButton.className = "strategy-alert-close";
+  closeButton.type = "button";
+  closeButton.setAttribute("aria-label", "关闭策略提醒");
+  closeButton.textContent = "×";
+  closeButton.addEventListener("click", () => alert.remove());
+  alert.append(copy, closeButton);
+  container.appendChild(alert);
+  window.setTimeout(() => alert.remove(), 12000);
+  return true;
+};
+
+const evaluateStrategyAlert = (suffix, target, remaining) => {
+  const settings = strategySettings[suffix];
+  if (!settings || !strategyEnabled[suffix] || remaining <= 0 || remaining > settings.windowSeconds) return;
+  if (Number(strategyAlertedTargets[suffix]) === target) return;
+  const recommendation = strategyRecommendation(strategyMarkets[suffix], settings);
+  if (!recommendation || !showStrategyAlert(suffix, recommendation, remaining)) return;
+
+  strategyAlertedTargets[suffix] = target;
+  writeStorageMap(sessionStorage, STRATEGY_ALERTED_KEY, strategyAlertedTargets);
+};
+
 const updateCountdowns = () => {
   const localNow = Date.now() / 1000;
   Object.entries(countdownTargets).forEach(([suffix, target]) => {
@@ -164,13 +293,19 @@ const updateCountdowns = () => {
     if (!el) return;
     if (!target) {
       el.textContent = "--:--";
+      countdownValues[suffix] = null;
       return;
     }
     const polymarketNow = localNow + (countdownClockOffsets[suffix] || 0);
     const remaining = Math.max(0, Math.floor(target - polymarketNow));
     const minutes = Math.floor(remaining / 60);
     const seconds = remaining % 60;
-    el.textContent = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    const countdownText = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    if (countdownValues[suffix] !== remaining) {
+      el.textContent = countdownText;
+      countdownValues[suffix] = remaining;
+    }
+    evaluateStrategyAlert(suffix, target, remaining);
   });
 };
 
@@ -292,7 +427,12 @@ const renderMarket = (market) => {
   countdownTargets[suffix] = Number.isFinite(marketEnd) && marketEnd > 0 ? marketEnd : null;
   const clockOffset = Number(snapshot.metadata?.polymarket_clock_offset_seconds);
   countdownClockOffsets[suffix] = Number.isFinite(clockOffset) ? clockOffset : 0;
-  updateCountdowns();
+  strategyMarkets[suffix] = {
+    tradeAction,
+    upBuyPrice: snapshot.up_buy_price,
+    downBuyPrice: snapshot.down_buy_price,
+    priceGap: snapshot.price_gap,
+  };
 
   const reasons = market.reasons ?? market.latest?.reasons ?? [];
   const container = document.getElementById(`reasons-${suffix}`);
@@ -316,6 +456,7 @@ const render = (payload) => {
   const mode = payload.overall_source_mode || (payload.use_simulation === false ? "live" : "simulation");
   setText("mode-pill", modeLabels[mode] || "未知模式");
   markets.forEach(renderMarket);
+  updateCountdowns();
 };
 
 const connectStream = () => {
@@ -342,8 +483,11 @@ const connectStream = () => {
       ["5m", "15m"].forEach((suffix) => {
         setText(`current-${suffix}`, fmt(price));
         const target = marketTargetPrices[suffix];
-        setPriceGap(`gap-${suffix}`, target == null ? null : price - target);
+        const priceGap = target == null ? null : price - target;
+        setPriceGap(`gap-${suffix}`, priceGap);
+        if (strategyMarkets[suffix]) strategyMarkets[suffix].priceGap = priceGap;
       });
+      updateCountdowns();
       setText("updated-feed", formatTime(heartbeat.timestamp));
     } catch (error) {
       console.error(error);
@@ -353,6 +497,140 @@ const connectStream = () => {
     setText("status-line", "实时数据流正在重新连接...");
   };
 };
+
+const strategySettingsPanels = Object.fromEntries(
+  ["5m", "15m"].map((suffix) => [suffix, document.getElementById(`strategy-settings-${suffix}`)]),
+);
+const strategySettingsButtons = Object.fromEntries(
+  ["5m", "15m"].map((suffix) => [suffix, document.getElementById(`strategy-settings-button-${suffix}`)]),
+);
+
+const closeStrategySettings = (suffix) => {
+  const panel = strategySettingsPanels[suffix];
+  const button = strategySettingsButtons[suffix];
+  if (panel) panel.hidden = true;
+  if (button) button.setAttribute("aria-expanded", "false");
+};
+
+const closeAllStrategySettings = (exceptSuffix = null) => {
+  Object.keys(strategySettingsPanels).forEach((suffix) => {
+    if (suffix !== exceptSuffix) closeStrategySettings(suffix);
+  });
+};
+
+const positionStrategySettings = (suffix) => {
+  const panel = strategySettingsPanels[suffix];
+  const button = strategySettingsButtons[suffix];
+  if (!panel || !button || panel.hidden) return;
+
+  const viewportPadding = 12;
+  const anchorGap = 8;
+  const buttonRect = button.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
+  const maxLeft = Math.max(viewportPadding, window.innerWidth - panelRect.width - viewportPadding);
+  const left = Math.min(maxLeft, Math.max(viewportPadding, buttonRect.right - panelRect.width));
+  const spaceBelow = window.innerHeight - buttonRect.bottom - viewportPadding;
+  const top = spaceBelow >= panelRect.height + anchorGap
+    ? buttonRect.bottom + anchorGap
+    : Math.max(viewportPadding, buttonRect.top - panelRect.height - anchorGap);
+
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.top = `${Math.round(top)}px`;
+};
+
+const openStrategySettings = (suffix) => {
+  const panel = strategySettingsPanels[suffix];
+  const button = strategySettingsButtons[suffix];
+  if (!panel || !button || button.hidden) return;
+  closeAllStrategySettings(suffix);
+  panel.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+  positionStrategySettings(suffix);
+};
+
+document.querySelectorAll("[data-strategy-settings-toggle]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const suffix = button.dataset.strategySettingsToggle;
+    const panel = strategySettingsPanels[suffix];
+    if (!panel || panel.hidden) openStrategySettings(suffix);
+    else closeStrategySettings(suffix);
+  });
+});
+
+document.querySelectorAll("[data-strategy-settings-close]").forEach((button) => {
+  button.addEventListener("click", () => closeStrategySettings(button.dataset.strategySettingsClose));
+});
+
+document.addEventListener("pointerdown", (event) => {
+  Object.keys(strategySettingsPanels).forEach((suffix) => {
+    const panel = strategySettingsPanels[suffix];
+    const button = strategySettingsButtons[suffix];
+    if (!panel || panel.hidden || panel.contains(event.target) || button?.contains(event.target)) return;
+    closeStrategySettings(suffix);
+  });
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeAllStrategySettings();
+});
+
+window.addEventListener("resize", () => {
+  Object.keys(strategySettingsPanels).forEach(positionStrategySettings);
+});
+window.addEventListener("scroll", () => closeAllStrategySettings());
+
+document.querySelectorAll("[data-strategy]").forEach((input) => {
+  const suffix = input.dataset.strategy;
+  if (!(suffix in strategyEnabled)) return;
+  const settingsButton = strategySettingsButtons[suffix];
+  input.checked = strategyEnabled[suffix];
+  if (settingsButton) settingsButton.hidden = !input.checked;
+  closeStrategySettings(suffix);
+  input.addEventListener("change", () => {
+    strategyEnabled[suffix] = input.checked;
+    if (settingsButton) settingsButton.hidden = !input.checked;
+    writeStorageMap(localStorage, STRATEGY_PREFERENCE_KEY, strategyEnabled);
+    if (input.checked) {
+      openStrategySettings(suffix);
+      updateCountdowns();
+    } else {
+      closeStrategySettings(suffix);
+      document.querySelector(`#strategy-alerts [data-alert-market="${suffix}"]`)?.remove();
+    }
+  });
+});
+
+const updateStrategySettingsSummary = (suffix) => {
+  const settings = strategySettings[suffix];
+  if (!settings) return;
+  setText(
+    `strategy-settings-summary-${suffix}`,
+    `倒计时 ${settings.windowSeconds}s · 买入价 < ${settings.maxBuyPrice.toFixed(2)} · 价格差 ±${settings.minPriceGap}`,
+  );
+};
+
+const applyStrategySetting = (suffix, key, input, normalizeInput) => {
+  const settings = strategySettings[suffix];
+  if (!settings) return;
+  if (!normalizeInput && input.value.trim() === "") return;
+  const value = normalizeStrategySetting(key, input.value, settings[key]);
+  settings[key] = value;
+  if (normalizeInput) input.value = value;
+  writeStorageMap(localStorage, STRATEGY_SETTINGS_KEY, strategySettings);
+  updateStrategySettingsSummary(suffix);
+  updateCountdowns();
+};
+
+document.querySelectorAll("[data-strategy-setting]").forEach((input) => {
+  const suffix = input.dataset.strategyMarket;
+  const key = input.dataset.strategySetting;
+  const settings = strategySettings[suffix];
+  if (!settings || !(key in settings)) return;
+  input.value = settings[key];
+  input.addEventListener("input", () => applyStrategySetting(suffix, key, input, false));
+  input.addEventListener("blur", () => applyStrategySetting(suffix, key, input, true));
+});
+["5m", "15m"].forEach(updateStrategySettingsSummary);
 
 document.getElementById("refresh-btn")?.addEventListener("click", async (event) => {
   const button = event.currentTarget;
